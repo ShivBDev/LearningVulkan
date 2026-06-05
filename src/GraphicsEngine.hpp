@@ -3,15 +3,15 @@
 
 #define GLFW_INCLUDE_VULKAN 
 #include <GLFW/glfw3.h>
-#include "VulkanCore/VulkanCore.hpp"
+#include "vk_impl/VulkanCore.hpp"
 
 class GraphicsEngine {
   public:
     GraphicsEngine(int _width, int _height, bool _skipInit = false);
     ~GraphicsEngine();
-    bool isRunning();
-    void update();
-    void init();
+    bool IsRunning();
+    void Update();
+    void Init();
   private:
     GraphicsEngine() = delete;
     

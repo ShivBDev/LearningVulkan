@@ -1,5 +1,5 @@
-#include "VulkanCore.hpp"
 #include "../shared.hpp"
+#include "VulkanCore.hpp"
 #include <iostream>
 #include <vector>
 #include <map>
@@ -17,6 +17,22 @@ namespace {
     { VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT, "Performance"}
   };
 
+  static std::unique_ptr<std::vector<const char*>> layers { nullptr };
+  static std::unique_ptr<std::vector<const char*>> extensions { nullptr };
+  void SetupVulkanLayersAndExtensions() {
+    if (layers == nullptr) {
+      layers = std::make_unique<std::vector<const char*>>();
+      layers->push_back("VK_LAYER_KHRONOS_validation");
+    }
+    if (extensions == nullptr) {
+      extensions = std::make_unique<std::vector<const char*>>();
+      extensions->push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+      extensions->push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+      extensions->push_back("VK_EXT_metal_surface");
+      extensions->push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+  }
+
   static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback (
   VkDebugUtilsMessageSeverityFlagBitsEXT _severity,
   VkDebugUtilsMessageTypeFlagsEXT _type,
@@ -31,32 +47,37 @@ namespace {
 }
 
 VulkanCore::VulkanCore() {
-  layers = std::make_unique<std::vector<const char*>>();
-  layers->push_back("VK_LAYER_KHRONOS_validation");
-
-  extensions = std::make_unique<std::vector<const char*>>();
-  extensions->push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-  extensions->push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-  extensions->push_back("VK_EXT_metal_surface");
-  extensions->push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+  SetupVulkanLayersAndExtensions();
 }
 
 VulkanCore::~VulkanCore() {
   if (vk_instance == nullptr) { return; }
-  if (vk_dbgMessenger != nullptr) {
-    PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDbgUtilsMessenger = nullptr;
-    vkDestroyDbgUtilsMessenger = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(vk_instance, "vkDestroyDebugUtilsMessengerEXT"));
-    if (!vkDestroyDbgUtilsMessenger) {
-      printf("Failed to find addr for vkDestroyDebugUtilsMessengerEXT");
-    } else {
-      vkDestroyDbgUtilsMessenger(vk_instance, vk_dbgMessenger, nullptr);
-    }
-    vk_dbgMessenger = nullptr;
+
+  PFN_vkDestroySurfaceKHR vkDestroySurface = nullptr;
+  vkDestroySurface = PFN_vkDestroySurfaceKHR(vkGetInstanceProcAddr(vk_instance, "vkDestroySurfaceKHR"));
+  if(!vkDestroySurface) {
+    printf("Failed to find addr for vkDestroySurfaceKHR");
+  } else {
+    vkDestroySurface(vk_instance, vk_surface, nullptr);
   }
+  vk_surface = nullptr;
+
+  // Teardown Debug Messenger
+  PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDbgUtilsMessenger = nullptr;
+  vkDestroyDbgUtilsMessenger = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(vk_instance, "vkDestroyDebugUtilsMessengerEXT"));
+  if (!vkDestroyDbgUtilsMessenger) {
+    printf("Failed to find addr for vkDestroyDebugUtilsMessengerEXT");
+  } else {
+    vkDestroyDbgUtilsMessenger(vk_instance, vk_dbgMessenger, nullptr);
+  }
+  vk_dbgMessenger = nullptr;
+
+  // Teardown Instance
   vkDestroyInstance(vk_instance, nullptr);
   vk_instance = nullptr;
   extensions = nullptr;
   layers = nullptr;
+  glfw_window = nullptr;
 }
 
 bool VulkanCore::Initialized() {
@@ -64,9 +85,13 @@ bool VulkanCore::Initialized() {
     vk_dbgMessenger != nullptr;
 }
 
-void VulkanCore::Init() {
+void VulkanCore::Init(GLFWwindow* _glfw_window) {
+  glfw_window = _glfw_window;
   CreateVkInst();
   CreateDebugCallback();
+  CreateSurface();
+  physical_devices.Init(vk_instance, vk_surface);
+  queue_family = physical_devices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true);
 }
 
 void VulkanCore::RenderScene() {
@@ -129,5 +154,13 @@ void VulkanCore::CreateDebugCallback() {
     printf("FAILED TO INIT VK DEBUG UTILS MESSENGER\n");
     vk_dbgMessenger = nullptr;
     return;
+  }
+}
+
+void VulkanCore::CreateSurface() {
+  VkResult result = glfwCreateWindowSurface(vk_instance, glfw_window, nullptr, &vk_surface);
+  if(result != VK_SUCCESS) {
+    printf("FAILED TO INIT GLFW/VK SURFACE");
+    vk_surface = nullptr;
   }
 }

@@ -1,9 +1,9 @@
 #include "GraphicsEngine.hpp"
 
 int main(void) {
-    GraphicsEngine window {1280, 720};
-    while(window.isRunning()) {
-        window.update();
+    GraphicsEngine window {640, 360};
+    while(window.IsRunning()) {
+        window.Update();
     }
     window.~GraphicsEngine();
 }

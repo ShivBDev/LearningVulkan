@@ -19,22 +19,22 @@ GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {
   width = _width;
   height = _height;
   if (!_skipInit) {
-    init();
+    Init();
   }
 }
 
-bool GraphicsEngine::isRunning() {
+bool GraphicsEngine::IsRunning() {
   return glfw_window != nullptr &&
     vk_core->Initialized() &&
     !glfwWindowShouldClose(glfw_window);
 }
 
-void GraphicsEngine::update() {
+void GraphicsEngine::Update() {
   vk_core->RenderScene();
   glfwPollEvents();
 }
 
-void GraphicsEngine::init() {
+void GraphicsEngine::Init() {
   if (!glfwInit() || !glfwVulkanSupported()) {
       return;
   }
@@ -52,5 +52,5 @@ void GraphicsEngine::init() {
   glfwSetKeyCallback(glfw_window, GLFW_KeyCallback);
 
   vk_core = std::make_unique<VulkanCore>();
-  vk_core->Init();
+  vk_core->Init(glfw_window);
 }

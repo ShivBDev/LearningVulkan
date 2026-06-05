@@ -13,7 +13,11 @@ class VulkanCore {
     void Init();
     void RenderScene();
   private:
+    void CreateVkInst();
+    void CreateDebugCallback();
+
     VkInstance vk_instance = nullptr;
+    VkDebugUtilsMessengerEXT vk_dbgMessenger = nullptr;
     std::unique_ptr<std::vector<const char*>> layers {};
     std::unique_ptr<std::vector<const char*>> extensions {};
 };

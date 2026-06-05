@@ -1,5 +1,5 @@
-#ifndef GRAPHICS_ENGINE_HPP
-#define GRAPHICS_ENGINE_HPP
+#ifndef graphics_engine_hpp
+#define graphics_engine_hpp
 
 #define GLFW_INCLUDE_VULKAN 
 #include <GLFW/glfw3.h>

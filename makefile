@@ -8,8 +8,8 @@ INCLUDE_FLAGS := \
 	-I./src \
 	-I$(VULKAN_SDK)/include \
 	-I$(VULKAN_SDK)/lib \
-	-I/opt/homebrew/include
-LINKER_FLAGS := -lvulkan -lglfw3 -L/opt/homebrew/lib -framework Cocoa -framework IOKit -framework CoreVideo
+	-I$(BREW_PATH)/include
+LINKER_FLAGS := -lvulkan -lglfw3 -L$(BREW_PATH)/lib -framework Cocoa -framework IOKit -framework CoreVideo
 SOURCE := $(shell find $(SRC_DIR) -type f -name "*.cpp")
 
 default:

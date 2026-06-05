@@ -1,16 +1,18 @@
 #include "GraphicsEngine.hpp"
+#include "shared.hpp"
 
 namespace {
   void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     }
-  }
+  } 
 }
 
 GraphicsEngine::~GraphicsEngine() {
   glfwTerminate();
   glfw_window = nullptr;
+  vk_core = nullptr;
 }
 
 GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {
@@ -22,10 +24,13 @@ GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {
 }
 
 bool GraphicsEngine::isRunning() {
-  return !glfwWindowShouldClose(glfw_window);
+  return glfw_window != nullptr &&
+    vk_core->Initialized() &&
+    !glfwWindowShouldClose(glfw_window);
 }
 
 void GraphicsEngine::update() {
+  vk_core->RenderScene();
   glfwPollEvents();
 }
 
@@ -36,7 +41,7 @@ void GraphicsEngine::init() {
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
-  glfw_window = glfwCreateWindow(width, height, "Tut01", NULL, NULL);
+  glfw_window = glfwCreateWindow(width, height, __engine_name, NULL, NULL);
 
   if(!glfw_window) {
       glfwTerminate();
@@ -45,4 +50,7 @@ void GraphicsEngine::init() {
   }
 
   glfwSetKeyCallback(glfw_window, GLFW_KeyCallback);
+
+  vk_core = std::make_unique<VulkanCore>();
+  vk_core->Init();
 }

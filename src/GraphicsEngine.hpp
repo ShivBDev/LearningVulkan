@@ -3,21 +3,22 @@
 
 #define GLFW_INCLUDE_VULKAN 
 #include <GLFW/glfw3.h>
+#include "VulkanCore/VulkanCore.hpp"
 
 class GraphicsEngine {
   public:
     GraphicsEngine(int _width, int _height, bool _skipInit = false);
     ~GraphicsEngine();
-    void update();
     bool isRunning();
+    void update();
+    void init();
   private:
     GraphicsEngine() = delete;
-    void init();
-
+    
     int width {};
     int height {};
-    bool initialized {false};
     GLFWwindow* glfw_window = nullptr;
+    std::unique_ptr<VulkanCore> vk_core = nullptr;
 };
 
 #endif

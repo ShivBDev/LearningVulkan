@@ -18,6 +18,7 @@ class VulkanCore {
     void CreateVkInst();
     void CreateDebugCallback();
     void CreateSurface();
+    void CreateDevice();
 
     VkInstance vk_instance = nullptr;
     VkDebugUtilsMessengerEXT vk_dbgMessenger = nullptr;
@@ -26,6 +27,7 @@ class VulkanCore {
 
     VulkanPhysicalDevices physical_devices {};
     uint32_t queue_family {};
+    VkDevice vk_logical_device{};
 };
 
 #endif

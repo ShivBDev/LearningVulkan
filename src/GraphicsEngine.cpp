@@ -1,5 +1,6 @@
 #include "GraphicsEngine.hpp"
 #include "shared.hpp"
+#include "Logging.h"
 
 namespace {
   void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -10,12 +11,15 @@ namespace {
 }
 
 GraphicsEngine::~GraphicsEngine() {
+  Logging::Debug("Entering Graphics Engine Destructor...");
+  Logging::Log("Tearing Down GLFW instance");
   glfwTerminate();
   glfw_window = nullptr;
   vk_core = nullptr;
 }
 
 GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {
+  Logging::Debug("Entering Graphics Engine Constructor...");
   width = _width;
   height = _height;
   if (!_skipInit) {
@@ -35,22 +39,25 @@ void GraphicsEngine::Update() {
 }
 
 void GraphicsEngine::Init() {
+  Logging::Log("Initializing Graphics Engine...");
+
   if (!glfwInit() || !glfwVulkanSupported()) {
-      return;
+    throw Logging::Error("Failed to init glfw!");
   }
+  Logging::Debug("Glfw initialized.");
+
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
-
   glfw_window = glfwCreateWindow(width, height, __engine_name, NULL, NULL);
-
   if(!glfw_window) {
       glfwTerminate();
       glfw_window = nullptr;
-      return;
+      throw Logging::Error("Failed to create glfw window!");
   }
-
   glfwSetKeyCallback(glfw_window, GLFW_KeyCallback);
+  Logging::Debug("Glfw window created.");
 
   vk_core = std::make_unique<VulkanCore>();
   vk_core->Init(glfw_window);
+  Logging::Log("Graphics Engine Initialized.");
 }

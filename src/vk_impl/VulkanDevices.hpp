@@ -12,6 +12,7 @@ struct PhysicalDevice {
   VkSurfaceCapabilitiesKHR surface_capabilities;
   VkPhysicalDeviceMemoryProperties memory_properties;
   std::vector<VkPresentModeKHR> present_modes;
+  VkPhysicalDeviceFeatures features;
 };
 
 class VulkanPhysicalDevices {

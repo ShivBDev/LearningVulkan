@@ -89,6 +89,10 @@ VulkanCore::~VulkanCore() {
   Logging::Log("Beginning Vulkan Core Teardown...");
   if (vk_instance == nullptr) { return; }
 
+  vkFreeCommandBuffers(vk_logical_device, vk_cmd_pool, uint32_t(vk_cmd_bufs.size()), vk_cmd_bufs.data());
+  vkDestroyCommandPool(vk_logical_device, vk_cmd_pool, nullptr);
+  Logging::Debug("Vulkan Command Pool Destroyed!");
+
   for(VkImageView const & imgView : swap_chain_image_views) {
     vkDestroyImageView(vk_logical_device, imgView, nullptr);
   }

@@ -1,6 +1,6 @@
 #include "GraphicsEngine.hpp"
 #include "shared.hpp"
-#include "Logging.h"
+#include "Logging.hpp"
 
 namespace {
   void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -12,10 +12,10 @@ namespace {
 
 GraphicsEngine::~GraphicsEngine() {
   Logging::Debug("Entering Graphics Engine Destructor...");
+  vk_core = nullptr;
   Logging::Log("Tearing Down GLFW instance");
   glfwTerminate();
   glfw_window = nullptr;
-  vk_core = nullptr;
 }
 
 GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {

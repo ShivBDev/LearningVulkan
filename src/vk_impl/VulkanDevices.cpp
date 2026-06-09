@@ -1,5 +1,5 @@
 #include "VulkanDevices.hpp"
-#include "../Logging.h"
+#include "../Logging.hpp"
 
 namespace {
   void __print_img_usage_flags(const VkImageUsageFlags& _flags) {
@@ -80,17 +80,17 @@ namespace {
 
   void __print_device_info(PhysicalDevice const & _device) {
     Logging::Debug(std::format("Device name: {}", _device.device_props.deviceName));
-    uint32_t apiVer = _device.device_props.apiVersion;
+    uint32_t apiVer { _device.device_props.apiVersion };
     Logging::Debug(std::format("Api Version: {}.{}.{}.{}",
       VK_API_VERSION_VARIANT(apiVer),
       VK_API_VERSION_MAJOR(apiVer),
       VK_API_VERSION_MINOR(apiVer),
       VK_API_VERSION_PATCH(apiVer)));
     Logging::Debug(std::format("  Num Family Queues: %{}", _device.queue_family_props.size()));
-    for(uint32_t idx = 0; idx < _device.queue_family_props.size(); idx++) {
-      VkQueueFamilyProperties const & queueFamilyProp = _device.queue_family_props[idx];
+    for(uint32_t idx { 0 }; idx < _device.queue_family_props.size(); idx++) {
+      VkQueueFamilyProperties const & queueFamilyProp { _device.queue_family_props[idx] };
       Logging::Debug(std::format("    Family: {} | Num Queues: {} | ", idx, queueFamilyProp.queueCount));
-      VkQueueFlags flags = queueFamilyProp.queueFlags;
+      VkQueueFlags flags { queueFamilyProp.queueFlags };
       Logging::Debug(std::format("GFX: {} | Compute: {} | Transfer: {} | Sparse Binding: {}",
         (flags & VK_QUEUE_GRAPHICS_BIT) ? "Yes" : "No",
         (flags & VK_QUEUE_COMPUTE_BIT) ? "Yes" : "No",
@@ -98,8 +98,8 @@ namespace {
         (flags & VK_QUEUE_SPARSE_BINDING_BIT) ? "Yes" : "No"));
     }
     Logging::Debug("  Surface Formats:");
-    for(uint32_t idx = 0; idx < _device.surface_formats.size(); idx++) {
-      VkSurfaceFormatKHR const & surfaceFormat = _device.surface_formats[idx];
+    for(uint32_t idx { 0 }; idx < _device.surface_formats.size(); idx++) {
+      VkSurfaceFormatKHR const & surfaceFormat { _device.surface_formats[idx] };
       Logging::Debug(std::format("    Format: {:x} | Color Space: {:x}",
         uint32_t(surfaceFormat.format), uint32_t(surfaceFormat.colorSpace)));
     }
@@ -107,7 +107,7 @@ namespace {
     __print_img_usage_flags(_device.surface_capabilities.supportedUsageFlags);
     Logging::Debug(std::format("  Num Presentation Modes: {}", _device.present_modes.size()));
     Logging::Debug(std::format("  Num Memory Types: {}", _device.memory_properties.memoryTypeCount));
-    for(uint32_t idx = 0; idx < _device.memory_properties.memoryTypeCount; idx++) {
+    for(uint32_t idx { 0 }; idx < _device.memory_properties.memoryTypeCount; idx++) {
       Logging::Debug(std::format("    Mem Type {} | flags: {} | heap: {}",
         idx,
         _device.memory_properties.memoryTypes[idx].propertyFlags,
@@ -124,14 +124,14 @@ VulkanPhysicalDevices::VulkanPhysicalDevices() {}
 VulkanPhysicalDevices::~VulkanPhysicalDevices() {}
 
 uint32_t VulkanPhysicalDevices::SelectDevice(VkQueueFlags _reqQueueType, bool _supportsPresent) {
-  for(uint32_t idx = 0; idx < devices.size(); idx++) {
-    PhysicalDevice const& device = devices[idx];
-    for(uint32_t idx2 = 0; idx2 < device.queue_family_props.size(); idx2++) {
-      VkQueueFamilyProperties const& props = device.queue_family_props[idx2];
+  for(uint32_t idx { 0 }; idx < devices.size(); idx++) {
+    PhysicalDevice const& device { devices[idx] };
+    for(uint32_t idx2 { 0 }; idx2 < device.queue_family_props.size(); idx2++) {
+      VkQueueFamilyProperties const& props { device.queue_family_props[idx2] };
       if ((props.queueFlags & _reqQueueType) &&
       bool(device.supports_present[idx2]) == _supportsPresent) {
         device_index = idx;
-        int queueFam = idx2;
+        uint32_t queueFam { idx2 };
         Logging::Debug(std::format("Using GFX Device {} and Queue Family {}", device_index, queueFam));
         return queueFam;
       }
@@ -148,7 +148,7 @@ PhysicalDevice const& VulkanPhysicalDevices::Selected() const {
 
 void VulkanPhysicalDevices::Init(const VkInstance& _instance, const VkSurfaceKHR& _surface) {
   Logging::Debug("Initializing Vulkan Physical Devices...");
-  uint32_t numDevices {};
+  uint32_t numDevices { 0 };
   VkResult result = vkEnumeratePhysicalDevices(_instance, &numDevices, nullptr);
   if(result != VK_SUCCESS) {
     throw Logging::Error("vk: Failed to Enumerate Physical Devices.");
@@ -162,21 +162,21 @@ void VulkanPhysicalDevices::Init(const VkInstance& _instance, const VkSurfaceKHR
     throw Logging::Error("vk: Failed to Fetch Physical Devices.");
   }
 
-  for(uint32_t idx = 0; idx < numDevices; idx++) {
+  for(uint32_t idx { 0 }; idx < numDevices; idx++) {
     // track vk device
-    VkPhysicalDevice& vkDevice = vkDevices[idx];
-    PhysicalDevice& newDevice = devices[idx];
+    VkPhysicalDevice& vkDevice { vkDevices[idx] };
+    PhysicalDevice& newDevice { devices[idx] };
     newDevice.vk_device = vkDevice;
     // get device props
     vkGetPhysicalDeviceProperties(vkDevice, &newDevice.device_props);
     // get queue family data
-    uint32_t numQFamilies {};
+    uint32_t numQFamilies { 0 };
     vkGetPhysicalDeviceQueueFamilyProperties(vkDevice, &numQFamilies, nullptr);
     newDevice.queue_family_props.resize(numQFamilies);
     newDevice.supports_present.resize(numQFamilies);
     vkGetPhysicalDeviceQueueFamilyProperties(vkDevice, &numQFamilies, newDevice.queue_family_props.data());
-    for(uint32_t idx2 = 0; idx2 < numQFamilies; idx2++) {
-      VkQueueFamilyProperties const & queueFamilyProp = newDevice.queue_family_props[idx2];
+    for(uint32_t idx2 { 0 }; idx2 < numQFamilies; idx2++) {
+      VkQueueFamilyProperties const & queueFamilyProp { newDevice.queue_family_props[idx2] };
       result = vkGetPhysicalDeviceSurfaceSupportKHR(
         vkDevice, idx2, _surface, &newDevice.supports_present[idx2]);
       if (result != VK_SUCCESS) {
@@ -185,7 +185,7 @@ void VulkanPhysicalDevices::Init(const VkInstance& _instance, const VkSurfaceKHR
       }
     }
     // surface formats
-    uint32_t numFormats {};
+    uint32_t numFormats { 0 };
     result = vkGetPhysicalDeviceSurfaceFormatsKHR(vkDevice, _surface, &numFormats, nullptr);
     if(result != VK_SUCCESS || numFormats <= 0) { throw "vk: Error Getting Physical Device Surface Formats KHR."; }
     newDevice.surface_formats.resize(numFormats);
@@ -194,7 +194,7 @@ void VulkanPhysicalDevices::Init(const VkInstance& _instance, const VkSurfaceKHR
     result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vkDevice, _surface, &newDevice.surface_capabilities);
     if(result != VK_SUCCESS) { throw "vk: Error Getting Physical Device Surface Capabilities KHR."; }
     // presentation modes
-    uint32_t numPresentModes {};
+    uint32_t numPresentModes { 0 };
     result = vkGetPhysicalDeviceSurfacePresentModesKHR(vkDevice, _surface, &numPresentModes, nullptr);
     if(result != VK_SUCCESS || numPresentModes <= 0) { throw "vk: error getting physical device surface presentation modes."; }
     newDevice.present_modes.resize(numPresentModes);

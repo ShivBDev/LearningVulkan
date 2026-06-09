@@ -1,3 +1,5 @@
+#ifndef logging_hpp
+#define logging_hpp
 #include <iostream>
 #include <string>
 
@@ -19,11 +21,12 @@ class Logging
   private:
     static void write(const char* msg, const char* color = reset);
     constexpr static char const
-      *red = "\e[31m", 
-      *yellow = "\e[33m",
-      *blue = "\e[36m",
-      *reset = "\e[0m";
+      *red { "\e[31m" }, 
+      *yellow { "\e[33m" },
+      *blue { "\e[36m" },
+      *reset { "\e[0m" };
 
-    constexpr static bool const verbose = true;
-    constexpr static bool const add_new_line = true;
+    constexpr static bool const verbose { true };
+    constexpr static bool const add_new_line { true };
 };
+#endif

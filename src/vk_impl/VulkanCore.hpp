@@ -3,8 +3,6 @@
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
-#include <vector>
-#include <memory>
 #include "VulkanDevices.hpp"
 
 class VulkanCore {
@@ -16,18 +14,30 @@ class VulkanCore {
     void RenderScene();
   private:
     void CreateVkInst();
+    VkInstance vk_instance { nullptr };
+
     void CreateDebugCallback();
+    VkDebugUtilsMessengerEXT vk_dbgMessenger { nullptr };
+
     void CreateSurface();
+    GLFWwindow* glfw_window { nullptr };
+    VkSurfaceKHR vk_surface { nullptr };
+
     void CreateDevice();
-
-    VkInstance vk_instance = nullptr;
-    VkDebugUtilsMessengerEXT vk_dbgMessenger = nullptr;
-    VkSurfaceKHR vk_surface = nullptr;
-    GLFWwindow* glfw_window = nullptr;
-
     VulkanPhysicalDevices physical_devices {};
     uint32_t queue_family {};
-    VkDevice vk_logical_device{};
+    VkDevice vk_logical_device {};
+
+    void CreateSwapChain();
+    VkSwapchainKHR swap_chain {};
+    std::vector<VkImage> swap_chain_images {};
+    std::vector<VkImageView> swap_chain_image_views {};
+
+    void CreateCommandBuffer();
+    VkCommandPool vk_cmd_pool {};
+    std::vector<VkCommandBuffer> vk_cmd_bufs {};
+    
+    bool use_compute_shaders { false };
 };
 
 #endif

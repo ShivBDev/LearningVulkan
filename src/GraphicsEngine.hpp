@@ -4,6 +4,7 @@
 #define GLFW_INCLUDE_VULKAN 
 #include <GLFW/glfw3.h>
 #include "vk_impl/VulkanCore.hpp"
+#include <memory>
 
 class GraphicsEngine {
   public:
@@ -15,10 +16,10 @@ class GraphicsEngine {
   private:
     GraphicsEngine() = delete;
     
-    int width {};
-    int height {};
-    GLFWwindow* glfw_window = nullptr;
-    std::unique_ptr<VulkanCore> vk_core = nullptr;
+    int width { 0 };
+    int height { 0 };
+    GLFWwindow* glfw_window { nullptr };
+    std::unique_ptr<VulkanCore> vk_core { nullptr };
 };
 
 #endif

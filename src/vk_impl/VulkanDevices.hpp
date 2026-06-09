@@ -24,6 +24,6 @@ class VulkanPhysicalDevices {
     PhysicalDevice const& Selected() const;
   private:
     std::vector<PhysicalDevice> devices {};
-    int device_index = -1;
+    int device_index { -1 };
 };
 #endif

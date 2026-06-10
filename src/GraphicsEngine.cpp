@@ -12,7 +12,7 @@ namespace {
 
 GraphicsEngine::~GraphicsEngine() {
   Logging::Debug("Entering Graphics Engine Destructor...");
-  vk_core = nullptr;
+  vk_engine = nullptr;
   Logging::Log("Tearing Down GLFW instance");
   glfwTerminate();
   glfw_window = nullptr;
@@ -29,12 +29,11 @@ GraphicsEngine::GraphicsEngine(int _width, int _height, bool _skipInit) {
 
 bool GraphicsEngine::IsRunning() {
   return glfw_window != nullptr &&
-    vk_core->Initialized() &&
     !glfwWindowShouldClose(glfw_window);
 }
 
 void GraphicsEngine::Update() {
-  vk_core->RenderScene();
+  vk_engine->RenderScene();
   glfwPollEvents();
 }
 
@@ -57,7 +56,6 @@ void GraphicsEngine::Init() {
   glfwSetKeyCallback(glfw_window, GLFW_KeyCallback);
   Logging::Debug("Glfw window created.");
 
-  vk_core = std::make_unique<VulkanCore>();
-  vk_core->Init(glfw_window);
+  vk_engine = std::make_unique<VulkanEngine>(glfw_window);
   Logging::Log("Graphics Engine Initialized.");
 }

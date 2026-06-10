@@ -1,7 +1,8 @@
 #include "../shared.hpp"
 #include "../Logging.hpp"
-#include "VulkanCore.hpp"
+#include "VulkanEngine.hpp"
 #include "VulkanSettings.hpp"
+#include "VulkanUtils.hpp"
 #include <iostream>
 
 namespace {
@@ -76,95 +77,20 @@ namespace {
     };
     VkImageView imgView {};
     VkResult result = vkCreateImageView(_device, &imageViewCreateInfo, nullptr, &imgView);
-    if(result != VK_SUCCESS)
-    { throw Logging::Error("Failed to Create Image View"); }
+    Vk_CheckResult(result, "Failed to Create Image View");
     return imgView;
   }
-} // namespace
 
-VulkanCore::VulkanCore() {
-}
+} // locals
 
-VulkanCore::~VulkanCore() {
-  Logging::Log("Beginning Vulkan Core Teardown...");
-  if (vk_instance == nullptr) { return; }
-
-  vkFreeCommandBuffers(vk_logical_device, vk_cmd_pool, uint32_t(vk_cmd_bufs.size()), vk_cmd_bufs.data());
-  vkDestroyCommandPool(vk_logical_device, vk_cmd_pool, nullptr);
-  Logging::Debug("Vulkan Command Pool Destroyed!");
-
-  for(VkImageView const & imgView : swap_chain_image_views) {
-    vkDestroyImageView(vk_logical_device, imgView, nullptr);
-  }
-  vkDestroySwapchainKHR(vk_logical_device, swap_chain, nullptr);
-  Logging::Debug("Vulkan Swap Chain Destroyed!");
-
-  vkDestroyDevice(vk_logical_device, nullptr);
-  Logging::Debug("Vulkan Logical Device Destroyed.");
-
-  PFN_vkDestroySurfaceKHR vkDestroySurface = nullptr;
-  vkDestroySurface = PFN_vkDestroySurfaceKHR(vkGetInstanceProcAddr(vk_instance, "vkDestroySurfaceKHR"));
-  if(!vkDestroySurface) {
-    Logging::Warn("Failed to find addr for vkDestroySurfaceKHR");
-  } else {
-    vkDestroySurface(vk_instance, vk_surface, nullptr);
-  }
-  vk_surface = nullptr;
-  Logging::Debug("Vulkan Surface KHR Destroyed.");
-
-  // Teardown Debug Messenger
-  PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDbgUtilsMessenger = nullptr;
-  vkDestroyDbgUtilsMessenger = PFN_vkDestroyDebugUtilsMessengerEXT(vkGetInstanceProcAddr(vk_instance, "vkDestroyDebugUtilsMessengerEXT"));
-  if (!vkDestroyDbgUtilsMessenger) {
-    Logging::Warn("Failed to find addr for vkDestroyDebugUtilsMessengerEXT");
-  } else {
-    vkDestroyDbgUtilsMessenger(vk_instance, vk_dbgMessenger, nullptr);
-  }
-  vk_dbgMessenger = nullptr;
-  Logging::Debug("Vulkan Debug Messenger Destroyed.");
-
-  // Teardown Instance
-  vkDestroyInstance(vk_instance, nullptr);
-  vk_instance = nullptr;
-  glfw_window = nullptr;
-  Logging::Debug("Vulkan Instance Destroyed.");
-  Logging::Log("Vulkan Core Teardown Complete.");
-}
-
-bool VulkanCore::Initialized() {
-  return vk_instance != nullptr &&
-    vk_dbgMessenger != nullptr;
-}
-
-void VulkanCore::Init(GLFWwindow* _glfw_window) {
-  Logging::Log("Initializing Vulkan Core...");
-  glfw_window = _glfw_window;
-  CreateVkInst();
-  CreateDebugCallback();
-  CreateSurface();
-  physical_devices.Init(vk_instance, vk_surface);
-  queue_family = physical_devices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true);
-  CreateDevice();
-  CreateSwapChain();
-  CreateCommandBuffer();
-  Logging::Log("Vulkan Core Initialized.");
-}
-
-void VulkanCore::RenderScene() {
-
-}
-
-void VulkanCore::CreateVkInst() {
+void VulkanEngine::CreateVulkanInstance() {
   Logging::Debug("Creating Vulkan Instance...");
-  VkResult vkResult = vkCreateInstance(&__vk_instance_create_info, nullptr, &vk_instance);
-  if(vkResult != VK_SUCCESS) {
-      throw Logging::Error(std::format("Failed to crete Vk Instance: {}!", uint32_t(vkResult)));
-      vk_instance = nullptr;
-  }
+  VkResult result = vkCreateInstance(&__vk_instance_create_info, nullptr, &vk_instance);
+  Vk_CheckResult(result, std::format("Failed to crete Vk Instance: {}!", uint32_t(result)));
   Logging::Debug("Vulkan Instance Created.");
 }
 
-void VulkanCore::CreateDebugCallback() {
+void VulkanEngine::CreateDbgCallback() {
   Logging::Debug("Creating Vulkan Debug Callback...");
   VkDebugUtilsMessengerCreateInfoEXT const __vk_dbg_util_messenger_create_info {
     .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -180,37 +106,31 @@ void VulkanCore::CreateDebugCallback() {
     throw Logging::Error("Failed to init Vk Debug Utils Messenger!");
   }
   VkResult result = vkCreateDbgUtilsMessenger(vk_instance, &__vk_dbg_util_messenger_create_info, nullptr, &vk_dbgMessenger);
-  if (result != VK_SUCCESS) {
-    vk_dbgMessenger = nullptr;
-    throw Logging::Error("Failed to init Vk Debug Utils Messenger!");
-  }
+  Vk_CheckResult(result, "Failed to init Vk Debug Utils Messenger!");
   Logging::Debug("Vulkan Debug Callback Created.");
 }
 
-void VulkanCore::CreateSurface() {
+void VulkanEngine::CreateSurface() {
   Logging::Debug("Creating Vulkan Surface with Glfw Window...");
   VkResult result = glfwCreateWindowSurface(vk_instance, glfw_window, nullptr, &vk_surface);
-  if(result != VK_SUCCESS) {
-    vk_surface = nullptr;
-    throw Logging::Error("Failed to init Glfw/Vk Surface!");
-  }
+  Vk_CheckResult(result, "Failed to init Glfw/Vk Surface!");
   Logging::Debug("Vulkan Surface with Glfw Window Created.");
 }
 
-void VulkanCore::CreateDevice() {
+void VulkanEngine::CreateDevice() {
   Logging::Debug("Creating Vulkan Logical Device...");
   std::vector<float> queuePriorities { 1.0f };
   VkDeviceQueueCreateInfo const __vk_device_queue_create_info {
     .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
     .pNext = nullptr,
     .flags = 0,
-    .queueFamilyIndex = queue_family,
+    .queueFamilyIndex = vk_queue_family,
     .queueCount = 1,
     .pQueuePriorities = &queuePriorities[0]
   };
   // Geometry Shaders not supported w/ MoltenVK
   // Use compute shaders and indirect render
-  PhysicalDevice const & selectedDevice = physical_devices.Selected();
+  PhysicalDevice const & selectedDevice = vk_physical_devices.Selected();
   if(selectedDevice.features.geometryShader == VK_FALSE)
   {
     Logging::Warn("Geometry Shader Not Supported, Use Compute Shader!");
@@ -235,15 +155,14 @@ void VulkanCore::CreateDevice() {
     .pEnabledFeatures = &deviceFeatures
   };
 
-  VkResult result = vkCreateDevice(selectedDevice.vk_device, &deviceCreateInfo, nullptr, &vk_logical_device);
-  if (result != VK_SUCCESS) 
-  { throw Logging::Error("Failed to create logical device from physical device!"); }
+  VkResult result = vkCreateDevice(selectedDevice.vk_device, &deviceCreateInfo, nullptr, &vk_device);
+  Vk_CheckResult(result, "Failed to create logical device from physical device!");
   Logging::Debug("Vulkan Logical Device Created.");
 }
 
-void VulkanCore::CreateSwapChain() {
+void VulkanEngine::CreateSwapChain() {
   Logging::Debug("Creating Vulkan Swap Chain...");
-  PhysicalDevice const& selectedDevice = physical_devices.Selected();
+  PhysicalDevice const& selectedDevice = vk_physical_devices.Selected();
 
   VkSurfaceCapabilitiesKHR const & surfaceCapabilities = selectedDevice.surface_capabilities;
   uint32_t imageCount { VK_ChooseImageCount(surfaceCapabilities) };
@@ -264,51 +183,47 @@ void VulkanCore::CreateSwapChain() {
     .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
     .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
     .queueFamilyIndexCount = 1,
-    .pQueueFamilyIndices = &queue_family,
+    .pQueueFamilyIndices = &vk_queue_family,
     .preTransform = surfaceCapabilities.currentTransform,
     .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
     .presentMode = presentMode,
     .clipped = VK_TRUE
   };
 
-  VkResult result = vkCreateSwapchainKHR(vk_logical_device, &swapChainCreateInfo, nullptr, &swap_chain);
-  if (result != VK_SUCCESS)
-  { throw Logging::Error("Failed to create Vulkan Swapchain!"); }
+  VkResult result = vkCreateSwapchainKHR(vk_device, &swapChainCreateInfo, nullptr, &vk_swapchain);
+  Vk_CheckResult(result, "Failed to create Vulkan Swapchain!");
 
   uint32_t swapChainImgCt { 0 };
-  result = vkGetSwapchainImagesKHR(vk_logical_device, swap_chain, &swapChainImgCt, nullptr);
+  result = vkGetSwapchainImagesKHR(vk_device, vk_swapchain, &swapChainImgCt, nullptr);
   if(result != VK_SUCCESS || swapChainImgCt != imageCount)
   { throw Logging::Error(std::format("Swapchain has {} Images, Expected {}!", swapChainImgCt, imageCount)); }
   Logging::Debug(std::format("Swap Chain Image Count: {}", swapChainImgCt));
 
-  swap_chain_images.resize(swapChainImgCt);
-  swap_chain_image_views.resize(swapChainImgCt);
-  result = vkGetSwapchainImagesKHR(vk_logical_device, swap_chain, &swapChainImgCt, swap_chain_images.data());
-  if (result != VK_SUCCESS)
-  { throw Logging::Error("Failed to get Vulkan Swapchain Images!"); }
+  vk_swapchain_imgs.resize(swapChainImgCt);
+  vk_swapchain_img_views.resize(swapChainImgCt);
+  result = vkGetSwapchainImagesKHR(vk_device, vk_swapchain, &swapChainImgCt, vk_swapchain_imgs.data());
+  Vk_CheckResult(result, "Failed to get Vulkan Swapchain Images!");
 
   for(uint32_t idx { 0 }; idx < swapChainImgCt; idx++) {
-    swap_chain_image_views[idx] = VK_CreateImageView(vk_logical_device, swap_chain_images[idx], surfaceFormat.format);
+    vk_swapchain_img_views[idx] = VK_CreateImageView(vk_device, vk_swapchain_imgs[idx], surfaceFormat.format);
   }
-
   Logging::Debug("Vulkan Swap Chain Created.");
 }
 
-void VulkanCore::CreateCommandBuffer() {
+void VulkanEngine::CreateCommandBuffer() {
   Logging::Debug("Creating Vulkan Command Pool...");
   VkCommandPoolCreateInfo const cmdPoolCreateInfo {
     .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
     .pNext = nullptr,
     .flags = 0,
-    .queueFamilyIndex = queue_family
+    .queueFamilyIndex = vk_queue_family
   };
-  VkResult result = vkCreateCommandPool(vk_logical_device, &cmdPoolCreateInfo, nullptr, &vk_cmd_pool);
-  if(result != VK_SUCCESS)
-  { throw Logging::Error("Failed to create Vulkan Command Pool!"); }
+  VkResult result = vkCreateCommandPool(vk_device, &cmdPoolCreateInfo, nullptr, &vk_cmd_pool);
+  Vk_CheckResult(result, "Failed to create Vulkan Command Pool!");
   Logging::Debug("Vulkan Command Pool Created.");
 
   Logging::Debug("Creating Vulkan Command Buffers...");
-  uint32_t cmdBufCt = uint32_t(swap_chain_images.size());
+  uint32_t cmdBufCt = uint32_t(vk_swapchain_imgs.size());
   vk_cmd_bufs.resize(cmdBufCt);
   VkCommandBufferAllocateInfo const cmdBufAllocInfo {
     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -317,8 +232,99 @@ void VulkanCore::CreateCommandBuffer() {
     .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
     .commandBufferCount = cmdBufCt
   };
-  result = vkAllocateCommandBuffers(vk_logical_device, &cmdBufAllocInfo, vk_cmd_bufs.data());
-  if(result != VK_SUCCESS)
-  { throw Logging::Error("Failed to create Vulkan Command Buffer!"); }
+  result = vkAllocateCommandBuffers(vk_device, &cmdBufAllocInfo, vk_cmd_bufs.data());
+  Vk_CheckResult(result, "Failed to create Vulkan Command Buffer!");
   Logging::Debug("Vulkan Command Buffers Created.");
+}
+
+void VulkanEngine::RecordCommandBuffers() {
+  Logging::Debug("Recording Command Buffers...");
+  VkClearColorValue clearColor = { 0.137f, 0.902f, 0.698f, 0.0f };
+  VkImageSubresourceRange const imgRange {
+    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+    .baseMipLevel = 0,
+    .levelCount = 1,
+    .baseArrayLayer = 0,
+    .layerCount = 1
+  };
+  VkCommandBufferBeginInfo beginInfo {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    .pNext = nullptr,
+    .flags = 0,
+    .pInheritanceInfo = nullptr
+  };
+  for(uint32_t idx { 0 }; idx < vk_cmd_bufs.size(); idx++) {
+    VkCommandBuffer const & cmdBuf { vk_cmd_bufs[idx] };
+    VkResult result {};
+    result = vkBeginCommandBuffer(cmdBuf, &beginInfo);
+    Vk_CheckResult(result, "Failed to begin Command Buffer Record!");
+
+    vkCmdClearColorImage(cmdBuf, vk_swapchain_imgs[idx], VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &imgRange);
+
+    result = vkEndCommandBuffer(cmdBuf);
+    Vk_CheckResult(result, "Failed to end Command Buffer Record!");
+  }
+  Logging::Debug("Command Buffers Recorded.");
+}
+
+// VkQueue
+void VulkanEngine::VkQueue_CreateQueue() {
+  Logging::Debug("Creating Vulkan Queue and Semaphores...");
+  vkGetDeviceQueue(vk_device, vk_queue_family, 0, &vk_queue);
+  
+  VkSemaphoreCreateInfo const semaphoreCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    .pNext = nullptr,
+    .flags = 0
+  };
+  VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_render_complete_semaphore);
+  Vk_CheckResult(result, "Failed to create render complete semaphore!");
+
+  result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_present_complete_semaphore);
+  Vk_CheckResult(result, "Failed to create present complete semaphore!");
+
+  Logging::Debug("Vulkan Queue and Semaphores Created.");
+}
+
+uint32_t VulkanEngine::VkQueue_GetNextImg() {
+  uint32_t imgIdx { 0 };
+  uint64_t timeout { std::numeric_limits<uint64_t>::max() };
+  VkResult result = vkAcquireNextImageKHR(vk_device, vk_swapchain, timeout, vk_present_complete_semaphore, nullptr, &imgIdx);
+  Vk_CheckResult(result, "Failed to Acquire Next Img from Vk Queue!");
+  return imgIdx;
+}
+
+void VulkanEngine::VkQueue_SubmitBuf(VkCommandBuffer const & _cmdBuf, bool const _async) {
+  VkPipelineStageFlags waitFlags { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+  VkSubmitInfo const submitInfo {
+    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+    .pNext = nullptr,
+    .waitSemaphoreCount = uint32_t(_async ? 1 : 0),
+    .pWaitSemaphores = _async ? &vk_present_complete_semaphore : nullptr,
+    .pWaitDstStageMask = _async ? &waitFlags : nullptr,
+    .commandBufferCount = 1,
+    .pCommandBuffers = &_cmdBuf,
+    .signalSemaphoreCount = uint32_t(_async ? 1 : 0),
+    .pSignalSemaphores = _async ? &vk_render_complete_semaphore : nullptr
+  };
+  VkResult result = vkQueueSubmit(vk_queue, 1, &submitInfo, nullptr);
+  Vk_CheckResult(result, "Failed to Submit Vk Queue!");
+}
+
+void VulkanEngine::VkQueue_Present(uint32_t const _imgIdx) {
+  VkPresentInfoKHR const presentInfo {
+    .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+    .pNext = nullptr,
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores = &vk_render_complete_semaphore,
+    .swapchainCount = 1,
+    .pSwapchains = &vk_swapchain,
+    .pImageIndices = &_imgIdx
+  };
+  VkResult result = vkQueuePresentKHR(vk_queue, &presentInfo);
+  Vk_CheckResult(result, "Failed to Present Vk Queue!");
+}
+
+void VulkanEngine::VkQueue_WaitIdle() {
+  vkQueueWaitIdle(vk_queue);
 }

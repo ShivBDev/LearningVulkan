@@ -3,7 +3,10 @@
 #include "VulkanEngine.hpp"
 #include "VulkanSettings.hpp"
 #include "VulkanUtils.hpp"
+#include "glslang/Include/glslang_c_interface.h"
 #include <iostream>
+#include <filesystem>
+#include <fstream>
 
 namespace {
   static VKAPI_ATTR VkBool32 VKAPI_CALL VK_DebugCallback (
@@ -79,6 +82,140 @@ namespace {
     VkResult result = vkCreateImageView(_device, &imageViewCreateInfo, nullptr, &imgView);
     Vk_CheckResult(result, "Failed to Create Image View");
     return imgView;
+  }
+
+  bool ReadFile(std::filesystem::path const & _path, std::vector<char>& _dataOut, bool nullTerm = true) {
+    std::error_code err {};
+    uintmax_t fileSz { std::filesystem::file_size(_path, err) };
+    if(err) {
+      Logging::Error(std::format("File Size Check Err: {}", _path.string()));
+      return false;
+    }
+    if(fileSz == 0) {
+      Logging::Warn(std::format("File Empty: {}", _path.string()));
+      _dataOut.clear();
+      return true;
+    }
+    std::ifstream file { _path };
+    if(file.fail()) {
+      Logging::Error(std::format("File Open Fail: {}", _path.string()));
+      return false;
+    }
+    _dataOut.resize(fileSz);
+    file.read(_dataOut.data(), fileSz);
+    if(nullTerm && _dataOut.back() != '\0') { 
+      _dataOut.push_back('\0');
+    }
+    return true;
+  }
+
+  glslang_stage_t ShaderStageFromFilename(std::string const & _filename) {
+    std::string ext { std::filesystem::path(_filename).extension().string() };
+    if(ext == ".vert") { return GLSLANG_STAGE_VERTEX; }
+    else if(ext == ".frag") { return GLSLANG_STAGE_FRAGMENT; }
+    else if(ext == ".comp") { return GLSLANG_STAGE_COMPUTE; }
+    else if(ext == ".geom") { return GLSLANG_STAGE_GEOMETRY; }
+    else if(ext == ".tesc") { return GLSLANG_STAGE_TESSCONTROL; }
+    else if(ext == ".tese") { return GLSLANG_STAGE_TESSEVALUATION; }
+    throw Logging::Error(std::format("Unknown shader file extension: {}", ext));
+  }
+
+  // Preload from SPIR-V binaries
+  VkShaderModule CreateShaderModuleFromBinary(VkDevice const & _device, std::string const & _filePath) {
+    std::vector<char> shaderCode {};
+    if(!ReadFile(_filePath, shaderCode)) {
+      throw Logging::Error(std::format("Failed to read shader file: {}", _filePath));
+    }
+    VkShaderModule shaderModule {};
+    VkShaderModuleCreateInfo shaderModuleCreateInfo {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .pNext = nullptr, .flags = 0,
+      .codeSize = shaderCode.size(),
+      .pCode = reinterpret_cast<uint32_t const *>(shaderCode.data())
+    };
+    VkResult result = vkCreateShaderModule(_device, &shaderModuleCreateInfo, nullptr, &shaderModule);
+    Vk_CheckResult(result, std::format("Failed to create shader module for file: {}", _filePath));
+    return shaderModule;
+  }
+  // Compile from GLSL/HLSL source at runtime
+  VkShaderModule CreateShaderModuleFromText(VkDevice const & _device, std::string const & _filePath) {
+    std::vector<char> shaderSrc {};
+    if(!ReadFile(_filePath, shaderSrc)) {
+      throw Logging::Error(std::format("Failed to read shader file: {}", _filePath));
+    }
+    VkShaderModule shaderModule {};
+    std::vector<uint32_t> shaderCode{};
+    glslang_stage_t shaderStage { ShaderStageFromFilename(_filePath) };
+    glslang_initialize_process();
+
+    glslang_input_t shaderInput {
+      .language = GLSLANG_SOURCE_GLSL,
+      .stage = shaderStage,
+      .client = GLSLANG_CLIENT_VULKAN,
+      .client_version = GLSLANG_TARGET_VULKAN_1_4,
+      .target_language = GLSLANG_TARGET_SPV,
+      .target_language_version = GLSLANG_TARGET_SPV_1_5,
+      .code = shaderSrc.data(),
+      .default_version = 450,
+      .default_profile = GLSLANG_NO_PROFILE,
+      .force_default_version_and_profile = false,
+      .forward_compatible = false,
+      .messages = GLSLANG_MSG_DEFAULT_BIT
+    };
+    glslang_shader_t* shader = glslang_shader_create(&shaderInput);
+    if(!shader) {
+      throw Logging::Error(std::format("Failed to create glslang shader for file: {}", _filePath));
+    }
+    if(!glslang_shader_preprocess(shader, &shaderInput)){
+      std::string infoLog = glslang_shader_get_info_log(shader);
+      std::string debugLog = glslang_shader_get_info_debug_log(shader);
+      throw Logging::Error(std::format(
+        "GLSL Preprocess Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
+        _filePath, infoLog, debugLog));
+    }
+    if(!glslang_shader_parse(shader, &shaderInput)){
+      std::string infoLog = glslang_shader_get_info_log(shader);
+      std::string debugLog = glslang_shader_get_info_debug_log(shader);
+      throw Logging::Error(std::format(
+        "GLSL Parse Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
+        _filePath, infoLog, debugLog));
+    }
+
+    glslang_program_t* program = glslang_program_create();
+    if(!program) {
+      throw Logging::Error(std::format("Failed to create glslang program for file: {}", _filePath));
+    }
+    glslang_program_add_shader(program, shader);
+    if(!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
+      std::string infoLog = glslang_program_get_info_log(program);
+      std::string debugLog = glslang_program_get_info_debug_log(program);
+      throw Logging::Error(std::format(
+        "GLSL Link Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
+        _filePath, infoLog, debugLog));
+    }
+    glslang_program_SPIRV_generate(program, shaderStage);
+    size_t spirvSize = glslang_program_SPIRV_get_size(program);
+    shaderCode.resize(spirvSize);
+    glslang_program_SPIRV_get(program, shaderCode.data());
+    std::string spirvMsgs = glslang_program_SPIRV_get_messages(program);
+    if(!spirvMsgs.empty()) {
+      Logging::Warn(std::format("GLSL SPIR-V Generation Messages for file: {}\nMessages: {}", _filePath, spirvMsgs));
+    }
+
+    VkShaderModuleCreateInfo shaderModuleCreateInfo {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .pNext = nullptr, .flags = 0,
+      .codeSize = shaderCode.size() * sizeof(uint32_t),
+      .pCode = shaderCode.data()
+    };
+    VkResult result = vkCreateShaderModule(_device, &shaderModuleCreateInfo, nullptr, &shaderModule);
+    Vk_CheckResult(result, std::format("Failed to create shader module for file: {}", _filePath));
+
+    glslang_program_delete(program);
+    glslang_shader_delete(shader);
+    
+    glslang_finalize_process();
+    return shaderModule;
   }
 
 } // locals
@@ -168,7 +305,7 @@ void VulkanEngine::CreateSwapChain() {
   uint32_t imageCount { VK_ChooseImageCount(surfaceCapabilities) };
 
   VkPresentModeKHR presentMode { VK_ChoosePresentMode(selectedDevice.present_modes) };
-  VkSurfaceFormatKHR surfaceFormat { VK_ChooseSurfaceFormatAndColorSpace(selectedDevice.surface_formats) };
+  vk_surface_format = VK_ChooseSurfaceFormatAndColorSpace(selectedDevice.surface_formats);
 
   VkSwapchainCreateInfoKHR swapChainCreateInfo {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -176,8 +313,8 @@ void VulkanEngine::CreateSwapChain() {
     .flags = 0,
     .surface = vk_surface,
     .minImageCount = imageCount,
-    .imageFormat = surfaceFormat.format,
-    .imageColorSpace = surfaceFormat.colorSpace,
+    .imageFormat = vk_surface_format.format,
+    .imageColorSpace = vk_surface_format.colorSpace,
     .imageExtent = surfaceCapabilities.currentExtent,
     .imageArrayLayers = 1,
     .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -205,9 +342,93 @@ void VulkanEngine::CreateSwapChain() {
   Vk_CheckResult(result, "Failed to get Vulkan Swapchain Images!");
 
   for(uint32_t idx { 0 }; idx < swapChainImgCt; idx++) {
-    vk_swapchain_img_views[idx] = VK_CreateImageView(vk_device, vk_swapchain_imgs[idx], surfaceFormat.format);
+    vk_swapchain_img_views[idx] = VK_CreateImageView(vk_device, vk_swapchain_imgs[idx], vk_surface_format.format);
   }
   Logging::Debug("Vulkan Swap Chain Created.");
+}
+
+void VulkanEngine::CreateQueue() {
+  Logging::Debug("Creating Vulkan Queue and Semaphores...");
+  vkGetDeviceQueue(vk_device, vk_queue_family, 0, &vk_queue);
+  
+  VkSemaphoreCreateInfo const semaphoreCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    .pNext = nullptr,
+    .flags = 0
+  };
+  VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_render_complete_semaphore);
+  Vk_CheckResult(result, "Failed to create render complete semaphore!");
+
+  result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_present_complete_semaphore);
+  Vk_CheckResult(result, "Failed to create present complete semaphore!");
+
+  Logging::Debug("Vulkan Queue and Semaphores Created.");
+}
+
+void VulkanEngine::CreateSimpleRenderPass() {
+  Logging::Debug("Creating Simple Render Pass...");
+  VkAttachmentDescription attachDesc {
+    .flags = 0,
+    .format = vk_surface_format.format,
+    .samples = VK_SAMPLE_COUNT_1_BIT,
+    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+  };
+  VkAttachmentReference attachRef {
+    .attachment = 0,
+    .layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+  };
+  VkSubpassDescription subpassDesc {
+    .flags = 0,
+    .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+    .inputAttachmentCount = 0, .pInputAttachments = nullptr,
+    .colorAttachmentCount = 1, .pColorAttachments = &attachRef,
+    .pResolveAttachments = nullptr,
+    .pDepthStencilAttachment = nullptr,
+    .preserveAttachmentCount = 0, .pPreserveAttachments = nullptr
+  };
+  VkRenderPassCreateInfo renderPassCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+    .pNext = nullptr,
+    .flags = 0,
+    .attachmentCount = 1, .pAttachments = &attachDesc, // attachments
+    .subpassCount = 1, .pSubpasses = &subpassDesc, // subpasses
+    .dependencyCount = 0, .pDependencies = nullptr // dependencies
+  };
+  VkResult result = vkCreateRenderPass(vk_device, &renderPassCreateInfo, nullptr, &vk_render_pass);
+  Vk_CheckResult(result, "Failed to create Simple Render Pass!");
+  Logging::Debug("Simple Render Pass Created.");
+}
+
+void VulkanEngine::CreateFrameBuffers() {
+  Logging::Debug("Creating Vulkan Frame Buffers...");
+  vk_frame_buffers.resize(vk_swapchain_imgs.size());
+
+  int windowWidth { 0 }, windowHeight { 0 };
+  glfwGetFramebufferSize(glfw_window, &windowWidth, &windowHeight);
+  
+  VkFramebufferCreateInfo frameBufferCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+    .pNext = nullptr,
+    .renderPass = vk_render_pass,
+    .attachmentCount = 1,
+    .pAttachments = nullptr,
+    .width = uint32_t(windowWidth),
+    .height = uint32_t(windowHeight),
+    .layers = 1
+  };
+  VkResult result { VK_SUCCESS };
+  for(uint32_t idx { 0 }; idx < vk_swapchain_imgs.size(); idx++) {
+    frameBufferCreateInfo.pAttachments = &vk_swapchain_img_views[idx];
+    result = vkCreateFramebuffer(vk_device, &frameBufferCreateInfo, nullptr, &vk_frame_buffers[idx]);
+    Vk_CheckResult(result, "Error creating Vulkan Frame Buffer!"); 
+  }
+
+  Logging::Debug("Vulkan Frame Buffers Created.");
 }
 
 void VulkanEngine::CreateCommandBuffer() {
@@ -239,27 +460,44 @@ void VulkanEngine::CreateCommandBuffer() {
 
 void VulkanEngine::RecordCommandBuffers() {
   Logging::Debug("Recording Command Buffers...");
-  VkClearColorValue clearColor = { 0.137f, 0.902f, 0.698f, 0.0f };
-  VkImageSubresourceRange const imgRange {
-    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-    .baseMipLevel = 0,
-    .levelCount = 1,
-    .baseArrayLayer = 0,
-    .layerCount = 1
-  };
-  VkCommandBufferBeginInfo beginInfo {
+  VkClearColorValue const clearColor = { 0.137f, 0.902f, 0.698f, 0.0f };
+  VkClearValue const clearValue { .color = clearColor };
+  
+  VkCommandBufferBeginInfo const beginInfo {
     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
     .pNext = nullptr,
-    .flags = 0,
+    .flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, // 0 for clear
     .pInheritanceInfo = nullptr
   };
+  
+  int windowWidth { 0 }, windowHeight { 0 };
+  glfwGetFramebufferSize(glfw_window, &windowWidth, &windowHeight);
+  VkRenderPassBeginInfo renderPassBeginInfo {
+    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+    .pNext = nullptr,
+    .renderPass = vk_render_pass,
+    .renderArea {
+      .offset { .x = 0, .y = 0},
+      .extent {
+        .width = uint32_t(windowWidth),
+        .height = uint32_t(windowHeight)
+      }
+    },
+    .clearValueCount = 1,
+    .pClearValues = &clearValue
+  };
+
   for(uint32_t idx { 0 }; idx < vk_cmd_bufs.size(); idx++) {
     VkCommandBuffer const & cmdBuf { vk_cmd_bufs[idx] };
+    VkImage const & vkImg { vk_swapchain_imgs[idx] };
+
     VkResult result {};
     result = vkBeginCommandBuffer(cmdBuf, &beginInfo);
     Vk_CheckResult(result, "Failed to begin Command Buffer Record!");
 
-    vkCmdClearColorImage(cmdBuf, vk_swapchain_imgs[idx], VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &imgRange);
+    renderPassBeginInfo.framebuffer = vk_frame_buffers[idx];
+    vkCmdBeginRenderPass(cmdBuf, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(cmdBuf);
 
     result = vkEndCommandBuffer(cmdBuf);
     Vk_CheckResult(result, "Failed to end Command Buffer Record!");
@@ -267,25 +505,14 @@ void VulkanEngine::RecordCommandBuffers() {
   Logging::Debug("Command Buffers Recorded.");
 }
 
-// VkQueue
-void VulkanEngine::VkQueue_CreateQueue() {
-  Logging::Debug("Creating Vulkan Queue and Semaphores...");
-  vkGetDeviceQueue(vk_device, vk_queue_family, 0, &vk_queue);
-  
-  VkSemaphoreCreateInfo const semaphoreCreateInfo {
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-    .pNext = nullptr,
-    .flags = 0
-  };
-  VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_render_complete_semaphore);
-  Vk_CheckResult(result, "Failed to create render complete semaphore!");
-
-  result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_present_complete_semaphore);
-  Vk_CheckResult(result, "Failed to create present complete semaphore!");
-
-  Logging::Debug("Vulkan Queue and Semaphores Created.");
+void VulkanEngine::CreateShaders() {
+  Logging::Debug("Creating Shaders...");
+  vk_vert_shader_module = CreateShaderModuleFromText(vk_device, "test.vert");
+  vk_frag_shader_module = CreateShaderModuleFromText(vk_device, "test.frag");
+  Logging::Debug("Shaders Created.");
 }
 
+// VkQueue
 uint32_t VulkanEngine::VkQueue_GetNextImg() {
   uint32_t imgIdx { 0 };
   uint64_t timeout { std::numeric_limits<uint64_t>::max() };

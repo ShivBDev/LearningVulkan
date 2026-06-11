@@ -17,15 +17,30 @@ VulkanEngine::VulkanEngine(GLFWwindow* _glfw_window) {
   vk_queue_family = vk_physical_devices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true);
   CreateDevice();
   CreateSwapChain();
+  CreateQueue();
+
+  CreateSimpleRenderPass();
+  CreateFrameBuffers();
   CreateCommandBuffer();
   RecordCommandBuffers();
-  VkQueue_CreateQueue();
+  CreateShaders();
   Logging::Log("Vulkan Core Initialized.");
 }
 
 VulkanEngine::~VulkanEngine() {
   Logging::Log("Beginning Vulkan Core Teardown...");
   if (vk_instance == nullptr) { return; }
+
+  vkDestroyShaderModule(vk_device, vk_vert_shader_module, nullptr);
+  vkDestroyShaderModule(vk_device, vk_frag_shader_module, nullptr);
+  Logging::Debug("Vulkan Shaders Destroyed!");
+
+  for(VkFramebuffer const & fBuf : vk_frame_buffers) {
+    vkDestroyFramebuffer(vk_device, fBuf, nullptr);
+  }
+  Logging::Debug("Vulkan Frame Buffer Destroyed!");
+  vkDestroyRenderPass(vk_device, vk_render_pass, nullptr);
+  Logging::Debug("Vulkan Render Pass Destroyed!");
 
   vkDestroySemaphore(vk_device, vk_present_complete_semaphore, nullptr);
   vkDestroySemaphore(vk_device, vk_render_complete_semaphore, nullptr);

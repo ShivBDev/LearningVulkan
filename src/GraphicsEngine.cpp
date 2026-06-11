@@ -1,5 +1,4 @@
 #include "GraphicsEngine.hpp"
-#include "shared.hpp"
 #include "Logging.hpp"
 
 namespace {

@@ -9,7 +9,12 @@ INCLUDE_FLAGS := \
 	-I$(VULKAN_SDK)/include \
 	-I$(VULKAN_SDK)/lib \
 	-I$(BREW_PATH)/include
-LINKER_FLAGS := -lvulkan -lglfw3 -L$(BREW_PATH)/lib -framework Cocoa -framework IOKit -framework CoreVideo
+LINKER_FLAGS := \
+	-lvulkan \
+	-L$(BREW_PATH)/lib \
+	-lglfw3 -lSPIRV -lSPIRV-Tools -lSPIRV-Tools-Diff -lSPIRV-Tools-Opt \
+	-lglslang -lOSDependent -lGenericCodeGen -lMachineIndependent -lglslang-default-resource-limits\
+	-framework Cocoa -framework IOKit -framework CoreVideo
 SOURCE := $(shell find $(SRC_DIR) -type f -name "*.cpp")
 
 default:

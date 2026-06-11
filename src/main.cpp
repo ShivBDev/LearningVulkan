@@ -1,7 +1,7 @@
 #include "GraphicsEngine.hpp"
 
 int main(void) {
-    GraphicsEngine window { 640, 360 };
+    GraphicsEngine window { };
     while(window.IsRunning()) {
         window.Update();
     }

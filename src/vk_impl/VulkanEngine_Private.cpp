@@ -4,6 +4,7 @@
 #include "VulkanSettings.hpp"
 #include "VulkanUtils.hpp"
 #include "glslang/Include/glslang_c_interface.h"
+#include "glslang/Public/resource_limits_c.h"
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -123,7 +124,7 @@ namespace {
   // Preload from SPIR-V binaries
   VkShaderModule CreateShaderModuleFromBinary(VkDevice const & _device, std::string const & _filePath) {
     std::vector<char> shaderCode {};
-    if(!ReadFile(_filePath, shaderCode)) {
+    if(!ReadFile(_filePath, shaderCode, true)) {
       throw Logging::Error(std::format("Failed to read shader file: {}", _filePath));
     }
     VkShaderModule shaderModule {};
@@ -137,53 +138,55 @@ namespace {
     Vk_CheckResult(result, std::format("Failed to create shader module for file: {}", _filePath));
     return shaderModule;
   }
+
   // Compile from GLSL/HLSL source at runtime
   VkShaderModule CreateShaderModuleFromText(VkDevice const & _device, std::string const & _filePath) {
+    Logging::Debug(std::format("Creating Shader Module from Text File: {}", _filePath));
     std::vector<char> shaderSrc {};
-    if(!ReadFile(_filePath, shaderSrc)) {
-      throw Logging::Error(std::format("Failed to read shader file: {}", _filePath));
+    if(!ReadFile(_filePath, shaderSrc, true)) {
+        throw Logging::Error(std::format("Failed to read shader file: {}", _filePath));
     }
-    VkShaderModule shaderModule {};
-    std::vector<uint32_t> shaderCode{};
     glslang_stage_t shaderStage { ShaderStageFromFilename(_filePath) };
-    glslang_initialize_process();
 
-    glslang_input_t shaderInput {
-      .language = GLSLANG_SOURCE_GLSL,
-      .stage = shaderStage,
-      .client = GLSLANG_CLIENT_VULKAN,
-      .client_version = GLSLANG_TARGET_VULKAN_1_4,
-      .target_language = GLSLANG_TARGET_SPV,
-      .target_language_version = GLSLANG_TARGET_SPV_1_5,
-      .code = shaderSrc.data(),
-      .default_version = 450,
-      .default_profile = GLSLANG_NO_PROFILE,
-      .force_default_version_and_profile = false,
-      .forward_compatible = false,
-      .messages = GLSLANG_MSG_DEFAULT_BIT
-    };
-    glslang_shader_t* shader = glslang_shader_create(&shaderInput);
+    glslang_input_t preprocessInput {};
+    preprocessInput.language = GLSLANG_SOURCE_GLSL;
+    preprocessInput.stage = shaderStage;
+    preprocessInput.client = GLSLANG_CLIENT_VULKAN;
+    preprocessInput.client_version = GLSLANG_TARGET_VULKAN_1_2; // Kept at stable 1.2
+    preprocessInput.target_language = GLSLANG_TARGET_SPV;
+    preprocessInput.target_language_version = GLSLANG_TARGET_SPV_1_5;
+    preprocessInput.code = shaderSrc.data(); // Now safely null-terminated!
+    preprocessInput.default_version = 100;
+    preprocessInput.default_profile = GLSLANG_NO_PROFILE;
+    preprocessInput.messages = GLSLANG_MSG_DEFAULT_BIT;
+    preprocessInput.resource = glslang_default_resource();
+
+    glslang_shader_t* shader = glslang_shader_create(&preprocessInput);
     if(!shader) {
-      throw Logging::Error(std::format("Failed to create glslang shader for file: {}", _filePath));
+        throw Logging::Error(std::format("Failed to create glslang shader object."));
     }
-    if(!glslang_shader_preprocess(shader, &shaderInput)){
+    if(!glslang_shader_preprocess(shader, &preprocessInput)){
       std::string infoLog = glslang_shader_get_info_log(shader);
       std::string debugLog = glslang_shader_get_info_debug_log(shader);
+      glslang_shader_delete(shader);
       throw Logging::Error(std::format(
         "GLSL Preprocess Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
         _filePath, infoLog, debugLog));
     }
-    if(!glslang_shader_parse(shader, &shaderInput)){
-      std::string infoLog = glslang_shader_get_info_log(shader);
-      std::string debugLog = glslang_shader_get_info_debug_log(shader);
-      throw Logging::Error(std::format(
-        "GLSL Parse Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
-        _filePath, infoLog, debugLog));
+    // Deep copy the preprocessed code out into string for separate, clean input structure for the parsing phase
+    std::string preprocessedCode(glslang_shader_get_preprocessed_code(shader));
+    glslang_input_t parseInput = preprocessInput;
+    parseInput.code = preprocessedCode.c_str();
+    if(!glslang_shader_parse(shader, &parseInput)){
+        std::string infoLog = glslang_shader_get_info_log(shader);
+        glslang_shader_delete(shader);
+        throw Logging::Error(std::format("GLSL Parse Failed:\n{}", infoLog));
     }
 
     glslang_program_t* program = glslang_program_create();
     if(!program) {
-      throw Logging::Error(std::format("Failed to create glslang program for file: {}", _filePath));
+        glslang_shader_delete(shader);
+        throw Logging::Error(std::format("Failed to create glslang program."));
     }
     glslang_program_add_shader(program, shader);
     if(!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
@@ -193,12 +196,14 @@ namespace {
         "GLSL Link Failed for file: {}\nInfo Log: {}\nDebug Log: {}",
         _filePath, infoLog, debugLog));
     }
+
     glslang_program_SPIRV_generate(program, shaderStage);
     size_t spirvSize = glslang_program_SPIRV_get_size(program);
+    std::vector<uint32_t> shaderCode{};
     shaderCode.resize(spirvSize);
     glslang_program_SPIRV_get(program, shaderCode.data());
-    std::string spirvMsgs = glslang_program_SPIRV_get_messages(program);
-    if(!spirvMsgs.empty()) {
+    const char* spirvMsgs = glslang_program_SPIRV_get_messages(program);
+    if(spirvMsgs && strlen(spirvMsgs) > 0) {
       Logging::Warn(std::format("GLSL SPIR-V Generation Messages for file: {}\nMessages: {}", _filePath, spirvMsgs));
     }
 
@@ -208,16 +213,15 @@ namespace {
       .codeSize = shaderCode.size() * sizeof(uint32_t),
       .pCode = shaderCode.data()
     };
+    VkShaderModule shaderModule {};
     VkResult result = vkCreateShaderModule(_device, &shaderModuleCreateInfo, nullptr, &shaderModule);
     Vk_CheckResult(result, std::format("Failed to create shader module for file: {}", _filePath));
 
     glslang_program_delete(program);
     glslang_shader_delete(shader);
     
-    glslang_finalize_process();
     return shaderModule;
   }
-
 } // locals
 
 void VulkanEngine::CreateVulkanInstance() {
@@ -232,8 +236,8 @@ void VulkanEngine::CreateDbgCallback() {
   VkDebugUtilsMessengerCreateInfoEXT const __vk_dbg_util_messenger_create_info {
     .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
     .pNext = nullptr,
-    .messageSeverity = __vk_msg_types,
-    .messageType = __vk_msg_severities,
+    .messageSeverity = __vk_msg_severities,
+    .messageType = __vk_msg_types,
     .pfnUserCallback = &VK_DebugCallback,
     .pUserData = nullptr
   };
@@ -356,12 +360,17 @@ void VulkanEngine::CreateQueue() {
     .pNext = nullptr,
     .flags = 0
   };
-  VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_render_complete_semaphore);
-  Vk_CheckResult(result, "Failed to create render complete semaphore!");
-
-  result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &vk_present_complete_semaphore);
-  Vk_CheckResult(result, "Failed to create present complete semaphore!");
-
+  vk_render_complete_semaphores.resize(vk_swapchain_imgs.size());
+  vk_present_complete_semaphores.resize(vk_swapchain_imgs.size());
+  for(VkSemaphore& semaphore : vk_render_complete_semaphores) {
+    VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &semaphore);
+    Vk_CheckResult(result, "Failed to create render complete semaphore!");
+  }
+  for(VkSemaphore& semaphore : vk_present_complete_semaphores) {
+    VkResult result = vkCreateSemaphore(vk_device, &semaphoreCreateInfo, nullptr, &semaphore);
+    Vk_CheckResult(result, "Failed to create present complete semaphore!");
+  }
+  curr_semaphore_idx = 0;
   Logging::Debug("Vulkan Queue and Semaphores Created.");
 }
 
@@ -380,7 +389,7 @@ void VulkanEngine::CreateSimpleRenderPass() {
   };
   VkAttachmentReference attachRef {
     .attachment = 0,
-    .layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
   };
   VkSubpassDescription subpassDesc {
     .flags = 0,
@@ -429,6 +438,122 @@ void VulkanEngine::CreateFrameBuffers() {
   }
 
   Logging::Debug("Vulkan Frame Buffers Created.");
+}
+
+void VulkanEngine::CreateShaders() {
+  Logging::Debug("Creating Shaders...");
+  glslang_initialize_process();
+  vk_vert_shader_module = CreateShaderModuleFromText(vk_device, "/Users/shiv/Dev/LearningVulkan/src/shaders/test.vert");
+  vk_frag_shader_module = CreateShaderModuleFromText(vk_device, "/Users/shiv/Dev/LearningVulkan/src/shaders/test.frag");
+  glslang_finalize_process();
+  Logging::Debug("Shaders Created.");
+}
+
+void VulkanEngine::CreatePipeline() {
+  Logging::Debug("Creating Pipeline...");
+  std::vector<VkPipelineShaderStageCreateInfo> const shaderStageCreateInfos {
+    {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .pNext = nullptr, .flags = 0,
+      .stage = VK_SHADER_STAGE_VERTEX_BIT,
+      .module = vk_vert_shader_module,
+      .pName = "main",
+      .pSpecializationInfo = nullptr
+    },
+    {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .pNext = nullptr, .flags = 0,
+      .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+      .module = vk_frag_shader_module,
+      .pName = "main",
+      .pSpecializationInfo = nullptr
+    }
+  };
+  VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .vertexBindingDescriptionCount = 0, .pVertexBindingDescriptions = nullptr,
+    .vertexAttributeDescriptionCount = 0, .pVertexAttributeDescriptions = nullptr
+  };
+  VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    .primitiveRestartEnable = VK_FALSE
+  };
+
+  int windowWidth { 0 }, windowHeight { 0 };
+  glfwGetFramebufferSize(glfw_window, &windowWidth, &windowHeight);
+
+  VkViewport viewport {
+    .x = 0.0f, .y = 0.0f,
+    .width = float(windowWidth), .height = float(windowHeight),
+    .minDepth = 0.0f, .maxDepth = 1.0f
+  };
+  VkRect2D scissor {
+    .offset { .x = 0, .y = 0 },
+    .extent { .width = uint32_t(windowWidth), .height = uint32_t(windowHeight) }
+  };
+  VkPipelineViewportStateCreateInfo viewportStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .viewportCount = 1, .pViewports = &viewport,
+    .scissorCount = 1, .pScissors = &scissor
+  };
+  VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .polygonMode = VK_POLYGON_MODE_FILL,
+    .cullMode = VK_CULL_MODE_NONE,
+    .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+    .lineWidth = 1.0f
+  };
+  VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    .sampleShadingEnable = VK_FALSE,
+    .minSampleShading = 1.0f,
+  };
+  VkPipelineColorBlendAttachmentState colorBlendAttachmentState {
+    .blendEnable = VK_FALSE,
+    .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+  };
+  VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .logicOpEnable = VK_FALSE,
+    .logicOp = VK_LOGIC_OP_COPY,
+    .attachmentCount = 1, .pAttachments = &colorBlendAttachmentState
+  };
+  VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .setLayoutCount = 0, .pSetLayouts = nullptr,
+  };
+  VkResult result = vkCreatePipelineLayout(vk_device, &pipelineLayoutCreateInfo, nullptr, &vk_pipeline_layout);
+  Vk_CheckResult(result, "Failed to create Pipeline Layout!");
+  
+  VkGraphicsPipelineCreateInfo pipelineCreateInfo {
+    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .pNext = nullptr, .flags = 0,
+    .stageCount = static_cast<uint32_t>(shaderStageCreateInfos.size()), .pStages = shaderStageCreateInfos.data(),
+    .pVertexInputState = &vertexInputStateCreateInfo,
+    .pInputAssemblyState = &inputAssemblyStateCreateInfo,
+    .pViewportState = &viewportStateCreateInfo,
+    .pRasterizationState = &rasterizationStateCreateInfo,
+    .pMultisampleState = &multisampleStateCreateInfo,
+    .pColorBlendState = &colorBlendStateCreateInfo,
+    .layout = vk_pipeline_layout,
+    .renderPass = vk_render_pass,
+    .subpass = 0,
+    .basePipelineHandle = VK_NULL_HANDLE,
+    .basePipelineIndex = -1
+  };
+  result = vkCreateGraphicsPipelines(vk_device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &vk_pipeline);
+  Vk_CheckResult(result, "Failed to create Graphics Pipeline!");
+
+  Logging::Debug("Pipeline Created.");
 }
 
 void VulkanEngine::CreateCommandBuffer() {
@@ -494,29 +619,25 @@ void VulkanEngine::RecordCommandBuffers() {
     VkResult result {};
     result = vkBeginCommandBuffer(cmdBuf, &beginInfo);
     Vk_CheckResult(result, "Failed to begin Command Buffer Record!");
-
     renderPassBeginInfo.framebuffer = vk_frame_buffers[idx];
     vkCmdBeginRenderPass(cmdBuf, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdEndRenderPass(cmdBuf);
 
+    vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipeline);
+    uint32_t vertexCount { 3 }, instCount { 1 }, firstVertex { 0 }, firstInstance { 0 };
+    vkCmdDraw(cmdBuf, vertexCount, instCount, firstVertex, firstInstance);
+
+    vkCmdEndRenderPass(cmdBuf);
     result = vkEndCommandBuffer(cmdBuf);
     Vk_CheckResult(result, "Failed to end Command Buffer Record!");
   }
   Logging::Debug("Command Buffers Recorded.");
 }
 
-void VulkanEngine::CreateShaders() {
-  Logging::Debug("Creating Shaders...");
-  vk_vert_shader_module = CreateShaderModuleFromText(vk_device, "test.vert");
-  vk_frag_shader_module = CreateShaderModuleFromText(vk_device, "test.frag");
-  Logging::Debug("Shaders Created.");
-}
-
 // VkQueue
 uint32_t VulkanEngine::VkQueue_GetNextImg() {
   uint32_t imgIdx { 0 };
   uint64_t timeout { std::numeric_limits<uint64_t>::max() };
-  VkResult result = vkAcquireNextImageKHR(vk_device, vk_swapchain, timeout, vk_present_complete_semaphore, nullptr, &imgIdx);
+  VkResult result = vkAcquireNextImageKHR(vk_device, vk_swapchain, timeout, vk_present_complete_semaphores[curr_semaphore_idx], nullptr, &imgIdx);
   Vk_CheckResult(result, "Failed to Acquire Next Img from Vk Queue!");
   return imgIdx;
 }
@@ -527,12 +648,12 @@ void VulkanEngine::VkQueue_SubmitBuf(VkCommandBuffer const & _cmdBuf, bool const
     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
     .pNext = nullptr,
     .waitSemaphoreCount = uint32_t(_async ? 1 : 0),
-    .pWaitSemaphores = _async ? &vk_present_complete_semaphore : nullptr,
+    .pWaitSemaphores = _async ? &vk_present_complete_semaphores[curr_semaphore_idx] : nullptr,
     .pWaitDstStageMask = _async ? &waitFlags : nullptr,
     .commandBufferCount = 1,
     .pCommandBuffers = &_cmdBuf,
     .signalSemaphoreCount = uint32_t(_async ? 1 : 0),
-    .pSignalSemaphores = _async ? &vk_render_complete_semaphore : nullptr
+    .pSignalSemaphores = _async ? &vk_render_complete_semaphores[curr_semaphore_idx] : nullptr
   };
   VkResult result = vkQueueSubmit(vk_queue, 1, &submitInfo, nullptr);
   Vk_CheckResult(result, "Failed to Submit Vk Queue!");
@@ -543,7 +664,7 @@ void VulkanEngine::VkQueue_Present(uint32_t const _imgIdx) {
     .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
     .pNext = nullptr,
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &vk_render_complete_semaphore,
+    .pWaitSemaphores = &vk_render_complete_semaphores[curr_semaphore_idx],
     .swapchainCount = 1,
     .pSwapchains = &vk_swapchain,
     .pImageIndices = &_imgIdx
